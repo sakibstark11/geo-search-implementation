@@ -152,7 +152,7 @@ func findNearbyUsers(db *gorm.DB, sLat, sLng float64, radiusKm float64, maxUsers
 
 		// Query only the "new" area
 		var potentialUsers []User
-		err = db.Where("h3_index IN ?", hexStrings).Find(&potentialUsers).Error
+		err = db.Where("h3_index IN ?", hexStrings).Find(&potentialUsers).Limit(maxUsersRequired - len(finalResults)).Error
 		if err != nil {
 			return nil, err
 		}
