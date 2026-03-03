@@ -60,7 +60,7 @@ func main() {
 	}
 
 	elapsed := time.Since(start)
-	fmt.Printf("Found %d users within %.1fkm of Dhaka center.\n", len(results), radiusKm)
+	fmt.Printf("Found %d users within %.1fkm of Dhaka center\n", len(results), radiusKm)
 	fmt.Printf("Took %s\n", elapsed)
 
 	if len(results) > 0 {
