@@ -53,7 +53,7 @@ func main() {
 	radiusKm := 10.0
 	start := time.Now()
 
-	results, err := findNearbyUsers(db, SearchLat, SearchLng, radiusKm)
+	results, err := findNearbyUsers(db, SearchLat, SearchLng, radiusKm, 300)
 	if err != nil {
 		fmt.Printf("Error searching: %v\n", err)
 		return
@@ -103,10 +103,8 @@ func populateDatabase(db *gorm.DB, totalToCreate int) {
 	}
 }
 
-func findNearbyUsers(db *gorm.DB, sLat, sLng float64, radiusKm float64) ([]User, error) {
-
+func findNearbyUsers(db *gorm.DB, sLat, sLng float64, radiusKm float64, maxUsersRequired int) ([]User, error) {
 	centerLatLng := h3.NewLatLng(sLat, sLng)
-
 	centerCell, err := h3.LatLngToCell(centerLatLng, Resolution)
 	if err != nil {
 		return nil, fmt.Errorf("invalid search coordinates: %v", err)
@@ -117,32 +115,68 @@ func findNearbyUsers(db *gorm.DB, sLat, sLng float64, radiusKm float64) ([]User,
 		return nil, err
 	}
 
-	kRequired := int(math.Ceil(radiusKm / (edgeLen * 1.5)))
-	searchHexes, err := h3.GridDisk(centerCell, kRequired)
-	if err != nil {
-		return nil, err
-	}
-
-	hexStrings := make([]string, len(searchHexes))
-	for i, hex := range searchHexes {
-		hexStrings[i] = hex.String()
-	}
-
-	var potentialUsers []User
-	err = db.Where("h3_index IN ?", hexStrings).Find(&potentialUsers).Error
-	if err != nil {
-		return nil, err
-	}
-
+	// Maximum possible K we are willing to search
+	maxK := int(math.Ceil(radiusKm / (edgeLen * 1.5)))
+	fmt.Printf("will look at %d rings for %.1fkm\n", maxK, radiusKm)
 	var finalResults []User
-	for _, u := range potentialUsers {
-		uLatLng := h3.NewLatLng(u.Lat, u.Lng)
-		dist := h3.GreatCircleDistanceKm(centerLatLng, uLatLng)
 
-		if dist <= radiusKm {
-			finalResults = append(finalResults, u)
+	// Iterate through rings one by one (k=0 is the center cell)
+	for k := 0; k <= maxK; k++ {
+		var ringHexes []h3.Cell
+
+		if k == 0 {
+			ringHexes = []h3.Cell{centerCell}
+		} else {
+			// GridRing returns ONLY the hexagons at exactly distance k
+			ringHexes, err = h3.GridRing(centerCell, k)
+			if err != nil {
+				// If we hit a pentagon, GridRing returns an error.
+				// The likelihood of this is very small given there are only 11 pentagons.
+				// We fallback to GridDiskDistances which is slower but "Pentagon-safe".
+				// We only take the outermost ring [k]
+				allRings, diskErr := h3.GridDiskDistances(centerCell, k)
+				if diskErr != nil {
+					return nil, diskErr
+				}
+				ringHexes = allRings[k]
+			}
+		}
+
+		fmt.Printf("found %d hex cells at %d K ring\n", len(ringHexes), k)
+
+		// Convert only this ring to strings
+		hexStrings := make([]string, len(ringHexes))
+		for j, hex := range ringHexes {
+			hexStrings[j] = hex.String()
+		}
+
+		// Query only the "new" area
+		var potentialUsers []User
+		err = db.Where("h3_index IN ?", hexStrings).Find(&potentialUsers).Error
+		if err != nil {
+			return nil, err
+		}
+
+		// Filter and check count
+		for _, u := range potentialUsers {
+			uLatLng := h3.NewLatLng(u.Lat, u.Lng)
+			dist := h3.GreatCircleDistanceKm(centerLatLng, uLatLng)
+
+			if dist <= radiusKm {
+				finalResults = append(finalResults, u)
+				if len(finalResults) >= maxUsersRequired {
+					return finalResults, nil
+				}
+			}
+		}
+
+		// Optional: Check if the current ring's distance already exceeds radiusKm
+		// to stop even before reaching maxK
+		currentRingDist := float64(k) * edgeLen * 1.5
+		if currentRingDist > radiusKm && len(finalResults) > 0 {
+			break
 		}
 	}
 
-	return finalResults, nil
+	return finalResults, fmt.Errorf("only found %d/%d users", len(finalResults), maxUsersRequired)
 }
