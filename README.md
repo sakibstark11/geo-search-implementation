@@ -1,3 +1,3 @@
 # geo-search-implementation
 Uses H3 to efficiently find nearby users
-![Alt Text](./screenshot.png)
+![Alt Text](./python/image.png)
